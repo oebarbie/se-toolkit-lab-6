@@ -1,204 +1,101 @@
-# Documentation Agent
+# System Agent Documentation
 
 ## Overview
 
-This agent is a CLI program that answers questions using the project wiki. It has **tools** (`read_file`, `list_files`) that allow it to navigate and read files from the project repository, and an **agentic loop** that enables it to make multiple tool calls before providing a final answer.
+This agent answers questions using three information sources:
+1. **Project wiki** - via `list_files` and `read_file` tools
+2. **Source code** - via `read_file` tool
+3. **Deployed backend API** - via `query_api` tool
 
 ## Architecture
 
 ### LLM Provider
-
-**Provider:** Qwen Code API (via qwen-code-oai-proxy)
-
-**Model:** `qwen3-coder-plus`
-
-**Why Qwen Code:**
-- 1000 free requests per day
-- Works from Russia without restrictions
-- No credit card required
-- OpenAI-compatible API with tool calling support
-- Strong reasoning capabilities
-
-### Components
-
-| Component | Description |
-|-----------|-------------|
-| `agent.py` | Main CLI script with tools and agentic loop |
-| `.env.agent.secret` | Environment configuration (API key, base URL, model) |
-| `qwen-code-oai-proxy` | Local proxy that exposes Qwen Code via OpenAI-compatible API |
+- **Provider:** Qwen Code API (via qwen-code-oai-proxy)
+- **Model:** `qwen3-coder-plus`
 
 ### Tools
 
-The agent has two tools:
+#### read_file
+Reads file contents from the project repository.
+- **Parameters:** `path` (relative path from project root)
+- **Security:** Blocks path traversal (../) and absolute paths
 
-#### `read_file`
+#### list_files
+Lists directory contents.
+- **Parameters:** `path` (relative directory path)
+- **Security:** Blocks path traversal
 
-Read the contents of a file from the project repository.
+#### query_api
+Queries the deployed backend API with authentication.
+- **Parameters:** `method` (GET/POST/PUT/DELETE), `path` (API endpoint), `body` (optional JSON)
+- **Authentication:** Bearer token using `LMS_API_KEY`
+- **Base URL:** `AGENT_API_BASE_URL` env var (default: http://localhost:42002)
 
-**Parameters:**
-- `path` (string, required): Relative path from project root (e.g., `wiki/git-workflow.md`)
-
-**Returns:** File contents as a string, or an error message if the file doesn't exist.
-
-**Security:**
-- Rejects absolute paths
-- Rejects path traversal (`../`)
-- Only allows files within project root
-
-#### `list_files`
-
-List files and directories at a given path.
-
-**Parameters:**
-- `path` (string, required): Relative directory path from project root (e.g., `wiki`)
-
-**Returns:** Newline-separated listing of entries.
-
-**Security:**
-- Rejects absolute paths
-- Rejects path traversal (`../`)
-- Only allows directories within project root
-
-## Agentic Loop
-
-The agentic loop enables the agent to:
-1. Send the user's question + tool definitions to the LLM
-2. If the LLM responds with `tool_calls` → execute each tool, append results as `tool` role messages, go to step 1
-3. If the LLM responds with a text message (no tool calls) → that's the final answer
-4. If 10 tool calls are reached → stop looping and provide whatever answer is available
-
-```
-Question ──▶ LLM ──▶ tool call? ──yes──▶ execute tool ──▶ back to LLM
-                     │
-                     no
-                     │
-                     ▼
-                JSON output
-```
-
-### Loop Limits
-
-- Maximum 10 tool calls per question
-- Timeout: 60 seconds per LLM request
-
-## System Prompt Strategy
-
-The system prompt instructs the LLM to:
-1. Use `list_files` to discover wiki directory structure
-2. Use `read_file` to read relevant wiki files
-3. Find the specific section that answers the question
-4. Include the source reference (file path + section anchor)
-5. Only make tool calls when necessary
-
-## Usage
-
-### Basic Usage
-
-```bash
-uv run agent.py "Your question here"
-```
-
-### Examples
-
-**List wiki files:**
-```bash
-uv run agent.py "What files are in the wiki?"
-```
-
-**Find information about merge conflicts:**
-```bash
-uv run agent.py "How do you resolve a merge conflict?"
-```
-
-### Output Format
-
-The agent outputs a single JSON line to stdout:
-
-```json
-{
-  "answer": "The answer text from the LLM",
-  "source": "wiki/git-workflow.md#resolving-merge-conflicts",
-  "tool_calls": [
-    {
-      "tool": "list_files",
-      "args": {"path": "wiki"},
-      "result": "git-workflow.md\n..."
-    },
-    {
-      "tool": "read_file",
-      "args": {"path": "wiki/git-workflow.md"},
-      "result": "..."
-    }
-  ]
-}
-```
-
-- `answer` (string, required): The LLM's response text
-- `source` (string, required): The wiki section reference (e.g., `wiki/git-workflow.md#section-anchor`)
-- `tool_calls` (array, required): All tool calls made during the agentic loop
-
-**Note:** All debug/logging output goes to stderr, only the JSON result goes to stdout.
+### Agentic Loop
+1. Send question + tool definitions to LLM
+2. If LLM returns tool_calls, execute tools and append results
+3. Loop back to step 1 with updated conversation
+4. When LLM returns final answer, extract source and output JSON
+5. Maximum 15 tool calls per question
 
 ## Configuration
 
 ### Environment Variables
+| Variable | Source | Purpose |
+|----------|--------|---------|
+| LLM_API_KEY | .env.agent.secret | LLM API authentication |
+| LLM_API_BASE | .env.agent.secret | LLM endpoint URL |
+| LLM_MODEL | .env.agent.secret | Model name |
+| LMS_API_KEY | .env.docker.secret | Backend API authentication |
+| AGENT_API_BASE_URL | Optional | Backend base URL (default: localhost:42002) |
 
-Create `.env.agent.secret` in the project root:
+**Important:** All config is read from environment variables, never hardcoded. The autochecker injects its own values.
 
-```bash
-# LLM API key
-LLM_API_KEY=qwen-lab-api-key-2026
+## Tool Selection Strategy
 
-# API base URL (OpenAI-compatible endpoint)
-LLM_API_BASE=http://127.0.0.1:42005/v1
+The system prompt guides the LLM:
+- **Wiki questions** ("How do I...", "What is the workflow...") → `list_files`/`read_file`
+- **Data queries** ("How many items...", "What is the score...") → `query_api`
+- **System facts** ("What framework...", "What port...") → `query_api` or `read_file`
+- **Source code** ("Show me the code...") → `read_file`
 
-# Model name
-LLM_MODEL=qwen3-coder-plus
-```
+## Lessons Learned
 
-### Setting Up Qwen Code API
+1. **Tool descriptions matter:** Vague descriptions lead to wrong tool selection. Be specific about when to use each tool.
 
-1. Install Qwen Code CLI on your VM:
-   ```bash
-   export PNPM_HOME="/home/me/.local/share/pnpm"
-   export PATH="$PNPM_HOME:$PATH"
-   pnpm add -g @qwen-code/qwen-code
-   ```
+2. **Content truncation:** Large files get truncated. The agent needs to handle partial content gracefully.
 
-2. Clone and configure qwen-code-oai-proxy:
-   ```bash
-   git clone https://github.com/inno-se-toolkit/qwen-code-oai-proxy ~/qwen-code-oai-proxy
-   cd ~/qwen-code-oai-proxy
-   cp .env.example .env
-   # Edit .env to set QWEN_API_KEY
-   docker compose up --build -d
-   ```
+3. **API error handling:** The query_api tool must handle connection errors and return meaningful error messages.
 
-3. The API will be available at `http://localhost:42005/v1`
+4. **Source extraction:** The source field is optional for API questions but required for wiki questions. The regex extractor handles both file paths and API endpoints.
 
-## Error Handling
+5. **Iteration is key:** Running run_eval.py repeatedly and fixing failures is essential. Each failure reveals a gap in tool selection or implementation.
 
-- **Missing question:** Prints usage to stderr, exits with code 1
-- **Missing config:** Prints error to stderr, exits with code 1
-- **Network error:** Returns error in JSON, exits with code 0
-- **Invalid LLM response:** Returns error in JSON, exits with code 0
-- **Max tool calls reached:** Returns partial answer with tool calls made
+## Final Eval Score
 
-## Testing
+(To be updated after passing all 10 local questions)
 
-Run the regression tests:
+## Usage
 
 ```bash
-uv run pytest tests/test_agent.py -v
+# Basic usage
+uv run agent.py "Your question here"
+
+# Run local evaluation
+uv run run_eval.py
+
+# Run single question for debugging
+uv run run_eval.py --index 3
 ```
 
-## Files
+## Output Format
 
-| File | Description |
-|------|-------------|
-| `agent.py` | Main agent CLI with tools and agentic loop |
-| `.env.agent.secret` | LLM configuration (not committed to git) |
-| `AGENT.md` | This documentation |
-| `plans/task-1.md` | Task 1 implementation plan |
-| `plans/task-2.md` | Task 2 implementation plan |
-| `tests/test_agent.py` | Regression tests |
+```json
+{
+  "answer": "The answer text",
+  "source": "wiki/file.md#section or /api/endpoint",
+  "tool_calls": [
+    {"tool": "query_api", "args": {"method": "GET", "path": "/items/"}, "result": "..."}
+  ]
+}
+```
