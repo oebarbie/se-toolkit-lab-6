@@ -61,3 +61,33 @@ class TestTask3SystemAgent:
         output = run_agent("What framework does the backend use?", project_root)
         assert "answer" in output
         assert len(output["answer"].strip()) > 0
+
+    def test_query_api_with_auth_false(self, project_root: Path) -> None:
+        """Test that the agent can query API without authentication when needed."""
+        output = run_agent(
+            "What HTTP status code does the API return when you request /items/ without authentication?",
+            project_root,
+        )
+        assert "answer" in output
+        assert "tool_calls" in output
+        tool_calls = output["tool_calls"]
+        assert len(tool_calls) > 0
+        # Check that query_api was used
+        tool_names = [tc.get("tool") for tc in tool_calls]
+        assert "query_api" in tool_names
+        # Check that the answer mentions 401 or unauthorized
+        answer_lower = output["answer"].lower()
+        assert "401" in answer_lower or "unauthorized" in answer_lower or "not authenticated" in answer_lower
+
+    def test_data_query_returns_numeric_value(self, project_root: Path) -> None:
+        """Test that data queries return plausible numeric values."""
+        output = run_agent("How many items are currently stored in the database?", project_root)
+        assert "answer" in output
+        assert "tool_calls" in output
+        # The answer should contain a number
+        import re
+        numbers = re.findall(r"\d+", output["answer"])
+        assert len(numbers) > 0, "Answer should contain a numeric value"
+        # Verify query_api was used for data query
+        tool_names = [tc.get("tool") for tc in output["tool_calls"]]
+        assert "query_api" in tool_names

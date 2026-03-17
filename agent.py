@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
 """
 System Agent CLI - Calls an LLM with tools to answer questions using wiki, source code, and backend API.
-
-Usage:
-    uv run agent.py "Your question here"
-
-Output:
-    JSON with 'answer', 'source' (optional), and 'tool_calls' fields to stdout.
-    All debug output goes to stderr.
 """
 
 import asyncio
@@ -21,25 +14,19 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
-# Maximum tool calls per question
 MAX_TOOL_CALLS = 15
-# Timeout for LLM requests in seconds
 LLM_TIMEOUT = 60.0
 
 
 def load_env() -> dict[str, str]:
-    """Load environment variables from .env files."""
-    # Load LLM config from .env.agent.secret
     env_agent_path = Path(__file__).parent / ".env.agent.secret"
     if env_agent_path.exists():
         load_dotenv(env_agent_path)
     
-    # Load LMS API key from .env.docker.secret
     env_docker_path = Path(__file__).parent / ".env.docker.secret"
     if env_docker_path.exists():
         load_dotenv(env_docker_path)
     
-    # Get LLM config (required)
     required_llm = ["LLM_API_KEY", "LLM_API_BASE", "LLM_MODEL"]
     config: dict[str, str] = {}
     for key in required_llm:
@@ -49,21 +36,18 @@ def load_env() -> dict[str, str]:
             sys.exit(1)
         config[key] = value
     
-    # Get LMS API key (required for query_api)
     lms_api_key = os.getenv("LMS_API_KEY")
     if not lms_api_key:
         print("Error: LMS_API_KEY not set in environment", file=sys.stderr)
         sys.exit(1)
     config["LMS_API_KEY"] = lms_api_key
     
-    # Get agent API base URL (optional, defaults to localhost)
     config["AGENT_API_BASE_URL"] = os.getenv("AGENT_API_BASE_URL", "http://localhost:42002")
     
     return config
 
 
 def is_safe_path(path: str) -> bool:
-    """Check if path is safe (no traversal outside project root)."""
     if path.startswith('/'):
         return False
     parts = path.split('/')
@@ -75,12 +59,10 @@ def is_safe_path(path: str) -> bool:
 
 
 def get_project_root() -> Path:
-    """Get the project root directory."""
     return Path(__file__).parent
 
 
 def read_file(path: str) -> dict[str, Any]:
-    """Read a file from the project repository."""
     if not is_safe_path(path):
         return {"success": False, "error": f"Unsafe path: {path}"}
     
@@ -101,7 +83,6 @@ def read_file(path: str) -> dict[str, Any]:
 
 
 def list_files(path: str) -> dict[str, Any]:
-    """List files and directories at a given path."""
     if not is_safe_path(path):
         return {"success": False, "error": f"Unsafe path: {path}"}
     
@@ -121,34 +102,24 @@ def list_files(path: str) -> dict[str, Any]:
         return {"success": False, "error": f"Error listing directory: {e}"}
 
 
-def query_api(method: str, path: str, body: str | None = None, config: dict[str, str] | None = None) -> dict[str, Any]:
-    """
-    Query the deployed backend API.
-    
-    Args:
-        method: HTTP method (GET, POST, PUT, DELETE)
-        path: API path (e.g., /items/, /analytics/completion-rate)
-        body: Optional JSON request body for POST/PUT
-        config: Configuration dict with LMS_API_KEY and AGENT_API_BASE_URL
-        
-    Returns:
-        Dict with status_code and body
-    """
+def query_api(method: str, path: str, body: str | None = None, auth: bool = True, config: dict[str, str] | None = None) -> dict[str, Any]:
     if config is None:
         config = load_env()
-    
+
     api_key = config.get("LMS_API_KEY", "")
     base_url = config.get("AGENT_API_BASE_URL", "http://localhost:42002")
-    
-    # Normalize path
+
     if not path.startswith('/'):
         path = '/' + path
-    
+
     url = f"{base_url}{path}"
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    
+    # Only add Authorization header if auth is True (default)
+    if auth and api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     
     try:
         with httpx.Client(timeout=30.0) as client:
@@ -169,7 +140,6 @@ def query_api(method: str, path: str, body: str | None = None, config: dict[str,
                 "body": response.text,
             }
             
-            # Try to parse JSON
             try:
                 result["json"] = response.json()
             except:
@@ -180,13 +150,12 @@ def query_api(method: str, path: str, body: str | None = None, config: dict[str,
         return {"success": False, "error": f"API request failed: {e}"}
 
 
-# Tool definitions for LLM function calling
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file from the project repository. Use this to read wiki files, source code, or configuration files.",
+            "description": "Read the contents of a file from the project repository. Use this to read wiki files (e.g., wiki/git-workflow.md), source code, or configuration files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -203,7 +172,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List files and directories at a given path in the project repository. Use this to explore directory structure.",
+            "description": "List files and directories at a given path. Use this to explore the wiki directory structure or find files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -220,7 +189,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "query_api",
-            "description": "Query the deployed backend API. Use this to get data from the system (items, analytics, scores) or check system status (framework, ports, status codes).",
+            "description": "Query the deployed backend API. Use this ONLY for data queries (how many items, scores, analytics) or system facts (framework, ports). Do NOT use for wiki documentation questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -230,11 +199,15 @@ TOOLS = [
                     },
                     "path": {
                         "type": "string",
-                        "description": "API path (e.g., '/items/', '/analytics/completion-rate', '/health')"
+                        "description": "API path (e.g., '/items/', '/analytics/completion-rate')"
                     },
                     "body": {
                         "type": "string",
                         "description": "JSON request body for POST/PUT requests (optional)"
+                    },
+                    "auth": {
+                        "type": "boolean",
+                        "description": "Whether to send authentication header (default: true). Set to false to test unauthenticated access."
                     }
                 },
                 "required": ["method", "path"]
@@ -243,28 +216,30 @@ TOOLS = [
     }
 ]
 
-# System prompt for the system agent
-SYSTEM_PROMPT = """You are a system agent that answers questions using:
-1. The project wiki (use list_files and read_file)
-2. The deployed backend API (use query_api)
-3. The source code (use read_file)
+SYSTEM_PROMPT = """You are a documentation agent that answers questions using the project wiki, source code, and backend API.
 
-Tool selection guide:
-- Use list_files/read_file for wiki documentation questions (e.g., "How do I...", "What is the workflow for...")
-- Use query_api for data queries (e.g., "How many items...", "What is the score...", "Get analytics...")
-- Use query_api for system facts (e.g., "What framework...", "What port...", "What status code...")
-- Use read_file for source code questions (e.g., "Show me the code for...", "What does this function do...")
+TOOL SELECTION RULES:
+1. For wiki/documentation questions ("According to the wiki...", "How do I...", "What is the workflow...", "protect a branch", "SSH", "merge conflict") → use list_files to find the wiki file, then read_file to get the content
+2. For data queries ("How many items...", "What is the score...", "Get analytics...") → use query_api with GET
+3. For system facts ("What framework...", "What port...", "What status code...") → use query_api OR read_file on source code
+4. For source code questions ("Show me the code...", "What does this function...") → use read_file
+5. For bug diagnosis questions ("crashes", "error", "bug", "went wrong") → 
+   a) First query the API to reproduce the error - try multiple inputs (e.g., different lab IDs like lab-01, lab-02, lab-99)
+   b) When you get an error response (500, 422, etc.), read the source code to find the buggy line
+   c) Explain what causes the bug and how to fix it
+
+IMPORTANT: For wiki questions, you MUST include the source as "wiki/filename.md" or "wiki/filename.md#section" in your answer.
 
 When using query_api:
 - Use GET for retrieving data
-- Use POST for creating items
 - Include the full path starting with /
+- Set auth=false ONLY when testing unauthenticated access (e.g., "What happens without auth?", "What status code without authentication?")
+- For bug diagnosis, try multiple inputs to reproduce the error (e.g., try lab-01, lab-02, lab-99 for analytics endpoints)
 
-Always provide the source reference when applicable (file path or API endpoint)."""
+Always provide the source reference: file path for wiki/code questions, API endpoint for data questions."""
 
 
 def execute_tool(name: str, args: dict[str, Any], config: dict[str, str]) -> str:
-    """Execute a tool and return the result as a string."""
     if name == "read_file":
         path = args.get("path", "")
         if not path:
@@ -272,8 +247,8 @@ def execute_tool(name: str, args: dict[str, Any], config: dict[str, str]) -> str
         result = read_file(path)
         if result["success"]:
             content = result["content"]
-            if len(content) > 8000:
-                content = content[:8000] + "\n... [truncated]"
+            if len(content) > 16000:
+                content = content[:16000] + "\n... [truncated]"
             return content
         else:
             return f"Error: {result['error']}"
@@ -290,9 +265,10 @@ def execute_tool(name: str, args: dict[str, Any], config: dict[str, str]) -> str
         method = args.get("method", "")
         path = args.get("path", "")
         body = args.get("body")
+        auth = args.get("auth", True)  # Default to True for backwards compatibility
         if not method or not path:
             return "Error: Missing required arguments 'method' and/or 'path'"
-        result = query_api(method, path, body, config)
+        result = query_api(method, path, body, auth, config)
         if result["success"]:
             response = f"Status: {result['status_code']}\nBody: {result['body']}"
             if len(response) > 4000:
@@ -309,7 +285,6 @@ async def call_llm(
     config: dict[str, str],
     tools: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Call the LLM API and return the response."""
     api_base = config["LLM_API_BASE"]
     api_key = config["LLM_API_KEY"]
     model = config["LLM_MODEL"]
@@ -339,16 +314,24 @@ async def call_llm(
         return None
 
 
-def extract_source(answer: str) -> str:
-    """Extract source reference from answer text."""
+def extract_source(answer: str, tool_calls: list[dict[str, Any]]) -> str:
+    # First check if any tool was read_file with a wiki file
+    for tc in tool_calls:
+        if tc.get("tool") == "read_file":
+            path = tc.get("args", {}).get("path", "")
+            if path.startswith("wiki/"):
+                return path
+    
     # Match patterns like wiki/something.md#anchor or wiki/something.md
-    match = re.search(r'(\w+/[\w-]+\.md(?:#[\w-]+)?)', answer)
+    match = re.search(r'(wiki/[\w-]+\.md(?:#[\w-]+)?)', answer)
     if match:
         return match.group(1)
+    
     # Match API endpoints
     match = re.search(r'(/[\w/-]+)', answer)
     if match:
         return match.group(1)
+    
     return ""
 
 
@@ -356,7 +339,6 @@ async def run_agentic_loop(
     question: str,
     config: dict[str, str],
 ) -> tuple[str, str, list[dict[str, Any]]]:
-    """Run the agentic loop to answer a question."""
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": question},
@@ -384,7 +366,7 @@ async def run_agentic_loop(
         
         if not tool_calls_in_response:
             answer = message.get("content") or "No answer provided"
-            source = extract_source(answer)
+            source = extract_source(answer, tool_calls)
             return (answer, source, tool_calls)
         
         for tool_call in tool_calls_in_response:
@@ -429,7 +411,7 @@ async def run_agentic_loop(
     print("Max tool calls reached, requesting final answer...", file=sys.stderr)
     messages.append({
         "role": "user",
-        "content": "Please provide your final answer based on the information gathered.",
+        "content": "Please provide your final answer. For wiki questions, include the source as 'wiki/filename.md'.",
     })
     
     response_data = await call_llm(messages, config, tools=None)
@@ -444,13 +426,12 @@ async def run_agentic_loop(
     except (KeyError, IndexError):
         answer = "Error: Max tool calls reached without a final answer"
     
-    source = extract_source(answer)
+    source = extract_source(answer, tool_calls)
     
     return (answer, source, tool_calls)
 
 
 def main() -> None:
-    """Main entry point."""
     if len(sys.argv) < 2:
         print("Usage: uv run agent.py \"Your question here\"", file=sys.stderr)
         sys.exit(1)
