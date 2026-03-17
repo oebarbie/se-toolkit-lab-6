@@ -91,3 +91,27 @@ class TestTask3SystemAgent:
         # Verify query_api was used for data query
         tool_names = [tc.get("tool") for tc in output["tool_calls"]]
         assert "query_api" in tool_names
+
+    def test_system_facts_tool_usage(self, project_root: Path) -> None:
+        """Test that system facts questions use read_file tool for source code analysis."""
+        output = run_agent("What framework does the backend use?", project_root)
+        assert "answer" in output
+        assert "tool_calls" in output
+        # Verify read_file was used to examine source code
+        tool_names = [tc.get("tool") for tc in output["tool_calls"]]
+        assert "read_file" in tool_names
+        # The answer should mention FastAPI
+        assert "fastapi" in output["answer"].lower()
+
+    def test_data_query_tool_usage(self, project_root: Path) -> None:
+        """Test that data queries use query_api tool."""
+        output = run_agent("How many items are in the database?", project_root)
+        assert "answer" in output
+        assert "tool_calls" in output
+        # Verify query_api was used for data query
+        tool_names = [tc.get("tool") for tc in output["tool_calls"]]
+        assert "query_api" in tool_names
+        # The answer should contain a number
+        import re
+        numbers = re.findall(r"\d+", output["answer"])
+        assert len(numbers) > 0, "Answer should contain a numeric value"
