@@ -223,6 +223,10 @@ TOOL SELECTION RULES:
 2. For data queries ("How many items...", "What is the score...", "Get analytics...") → use query_api with GET
 3. For system facts ("What framework...", "What port...", "What status code...") → use query_api OR read_file on source code
 4. For source code questions ("Show me the code...", "What does this function...") → use read_file
+5. For bug diagnosis questions ("crashes", "error", "bug", "went wrong") → 
+   a) First query the API to reproduce the error - try multiple inputs (e.g., different lab IDs like lab-01, lab-02, lab-99)
+   b) When you get an error response (500, 422, etc.), read the source code to find the buggy line
+   c) Explain what causes the bug and how to fix it
 
 IMPORTANT: For wiki questions, you MUST include the source as "wiki/filename.md" or "wiki/filename.md#section" in your answer.
 
@@ -230,6 +234,7 @@ When using query_api:
 - Use GET for retrieving data
 - Include the full path starting with /
 - Set auth=false ONLY when testing unauthenticated access (e.g., "What happens without auth?", "What status code without authentication?")
+- For bug diagnosis, try multiple inputs to reproduce the error (e.g., try lab-01, lab-02, lab-99 for analytics endpoints)
 
 Always provide the source reference: file path for wiki/code questions, API endpoint for data questions."""
 
