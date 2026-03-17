@@ -242,13 +242,13 @@ async def get_top_learners(
 
     rows = (await session.exec(stmt)).all()
 
-    ranked = sorted(rows, key=lambda r: r.avg_score, reverse=True)
+    ranked = sorted(rows, key=lambda r: r[1] or 0, reverse=True)
 
     return [
         {
-            "learner_id": r.learner_id,
-            "avg_score": round(r.avg_score, 1),
-            "attempts": r.attempts,
+            "learner_id": r[0],
+            "avg_score": round(r[1], 1),
+            "attempts": r[2],
         }
         for r in ranked[:limit]
     ]

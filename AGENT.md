@@ -79,6 +79,12 @@ The system prompt guides the LLM to select appropriate tools:
 
 7. **Environment setup:** The qwen-code-oai-proxy must be properly configured with OAuth credentials. Without this, the LLM API returns 401 errors.
 
+8. **Bug diagnosis capability:** The agent can effectively diagnose backend bugs by first reproducing errors through API calls, then reading source code to identify the root cause. This was demonstrated when fixing the sorting bug in the `/analytics/top-learners` endpoint where `None` values caused comparison errors.
+
+9. **Data-driven responses:** The `query_api` tool enables the agent to provide accurate, up-to-date information about system state (e.g., item counts, completion rates) rather than relying on potentially outdated documentation.
+
+10. **Multi-step reasoning:** The agent successfully handles complex questions that require chaining multiple tools, such as querying an API to reproduce an error, then reading source code to diagnose the bug, and finally explaining the fix.
+
 ## Final Eval Score
 
 **10/10 local questions passed** (100%)
