@@ -56,46 +56,81 @@ Queries the deployed backend API with optional authentication.
 
 ## Tool Selection Strategy
 
-The system prompt guides the LLM to select appropriate tools:
-- **Wiki questions** ("How do I...", "What is the workflow...", "protect a branch", "SSH") → `list_files`/`read_file`
-- **Data queries** ("How many items...", "What is the score...", "Get analytics...") → `query_api` with GET
-- **System facts** ("What framework...", "What port...", "What status code...") → `query_api` or `read_file` on source code
-- **Source code questions** ("Show me the code...", "What does this function...") → `read_file`
-- **Authentication testing** ("What happens without auth?", "status code without authentication") → `query_api` with `auth: false`
+The system prompt guides the LLM to select appropriate tools based on question type:
+
+**1. Wiki/Documentation Questions** ("According to the wiki...", "How do I...", "What is the workflow...", "protect a branch", "SSH", "merge conflict", "clean up Docker")
+- Use `list_files` to explore the wiki directory structure
+- Then use `read_file` to read the relevant wiki file (e.g., `wiki/git-workflow.md`, `wiki/ssh.md`, `wiki/docker.md`)
+- Include the source as "wiki/filename.md" or "wiki/filename.md#section" in the answer
+
+**2. Data Queries** ("How many items...", "How many learners...", "What is the score...", "Get analytics...")
+- Use `query_api` with GET method
+- For item count: GET `/items/` and count the array length in the response
+- For learner count: GET `/learners/` and count the array length
+- For analytics: GET `/analytics/<endpoint>?lab=<lab-id>`
+
+**3. System Facts** ("What framework...", "What port...", "What status code...", "What module...")
+- Use `read_file` to read the source code directly
+- For web framework: read `backend/app/main.py` and look for "from fastapi" imports
+- For Docker questions: read `Dockerfile`, `docker-compose.yml`
+- For request path: read `caddy/Caddyfile` to see reverse proxy rules
+
+**4. Source Code Questions** ("Show me the code...", "What does this function...", "Which function...")
+- Use `read_file` to read the relevant source file
+
+**5. Bug Diagnosis** ("crashes", "error", "bug", "went wrong", "risky operation", "division", "None")
+- First query the API to reproduce the error (try multiple inputs like lab-01, lab-02, lab-99)
+- When getting error responses (500, 422), read the source code to find the buggy line
+- Look for: division operations (division by zero), sorting with None values, missing null checks
+- Explain the bug cause and fix
+
+**6. Comparison Questions** ("Compare X vs Y", "How does X handle failures vs Y")
+- Read both source files (e.g., `backend/app/etl.py` for ETL, `backend/app/routers/*.py` for API)
+- Compare error handling strategies (try/except blocks, logging, rollback behavior)
+
+### Authentication Handling
+
+The `query_api` tool supports an `auth` parameter:
+- `auth=true` (default): Sends `Authorization: Bearer <LMS_API_KEY>` header
+- `auth=false`: Omits authentication header (useful for testing 401 responses)
+
+This allows the agent to discover authentication requirements by testing both authenticated and unauthenticated requests.
 
 ## Lessons Learned
 
-1. **Tool descriptions matter:** Vague descriptions lead to wrong tool selection. Be specific about when to use each tool. The `query_api` tool description now explicitly mentions when to use `auth: false`.
+### Task 1: Basic LLM Integration
+1. **Environment setup:** The qwen-code-oai-proxy must be properly configured with OAuth credentials. Without this, the LLM API returns 401 errors.
+2. **Error handling:** The agent must gracefully handle LLM API failures and return meaningful error messages.
 
-2. **Content truncation:** Large files get truncated at 16KB. The agent needs to handle partial content gracefully and make multiple calls if needed.
+### Task 2: Documentation Agent
+3. **Tool descriptions matter:** Vague descriptions lead to wrong tool selection. Be specific about when to use each tool.
+4. **Content truncation:** Large files get truncated at 16KB. The agent needs to handle partial content gracefully.
+5. **Source extraction:** The `source` field is required for wiki questions. The regex extractor handles both file paths and API endpoints.
+6. **Iteration is key:** Running `run_eval.py` repeatedly and fixing failures is essential.
 
-3. **API error handling:** The `query_api` tool must handle connection errors gracefully and return meaningful error messages to the LLM for diagnosis.
-
-4. **Source extraction:** The `source` field is optional for API questions but required for wiki questions. The regex extractor handles both file paths and API endpoints.
-
-5. **Iteration is key:** Running `run_eval.py` repeatedly and fixing failures is essential. Each failure reveals a gap in tool selection, tool implementation, or system prompt guidance.
-
-6. **Authentication flexibility:** Adding the `auth` parameter was crucial for questions that test unauthenticated API access. This allows the agent to discover 401 responses and other auth-related behaviors.
-
-7. **Environment setup:** The qwen-code-oai-proxy must be properly configured with OAuth credentials. Without this, the LLM API returns 401 errors.
-
-8. **Bug diagnosis capability:** The agent can effectively diagnose backend bugs by first reproducing errors through API calls, then reading source code to identify the root cause. This was demonstrated when fixing the sorting bug in the `/analytics/top-learners` endpoint where `None` values caused comparison errors.
-
-9. **Data-driven responses:** The `query_api` tool enables the agent to provide accurate, up-to-date information about system state (e.g., item counts, completion rates) rather than relying on potentially outdated documentation.
-
-10. **Multi-step reasoning:** The agent successfully handles complex questions that require chaining multiple tools, such as querying an API to reproduce an error, then reading source code to diagnose the bug, and finally explaining the fix.
+### Task 3: System Agent
+7. **Authentication flexibility:** Adding the `auth` parameter was crucial for questions that test unauthenticated API access. This allows the agent to discover 401 responses.
+8. **Data query interpretation:** The agent must parse JSON responses and count array elements for "how many" questions.
+9. **Bug diagnosis workflow:** The agent can diagnose backend bugs by:
+   - First reproducing errors through API calls with different inputs
+   - Reading source code to identify the root cause
+   - Looking for common patterns (division by zero, None-unsafe operations)
+10. **Multi-file reasoning:** Complex questions require reading multiple files (e.g., Dockerfile + docker-compose.yml + Caddyfile for request path).
+11. **System prompt specificity:** Detailed tool selection rules in the system prompt significantly improve accuracy.
 
 ## Final Eval Score
 
 **10/10 local questions passed** (100%)
 
-All local benchmark questions pass, including:
+All local benchmark questions pass:
 - Wiki lookup questions (branch protection, SSH)
 - Source code questions (web framework, router modules)
 - Data queries (item count)
 - Authentication testing (401 status code)
-- Bug diagnosis (division by zero in analytics)
+- Bug diagnosis (division by zero in `/analytics/completion-rate`, None-unsafe sorting in `/analytics/top-learners`)
 - Reasoning questions (request lifecycle, ETL idempotency)
+
+**Note:** The autochecker bot tests 10 additional hidden questions and may use LLM-based judging for open-ended answers.
 
 ## Usage
 
