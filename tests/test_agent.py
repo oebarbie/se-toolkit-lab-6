@@ -115,3 +115,30 @@ class TestTask3SystemAgent:
         import re
         numbers = re.findall(r"\d+", output["answer"])
         assert len(numbers) > 0, "Answer should contain a numeric value"
+
+    def test_wiki_branch_protection(self, project_root: Path) -> None:
+        """Test that wiki questions about branch protection use list_files and read_file."""
+        output = run_agent(
+            "According to the project wiki, what steps are needed to protect a branch?",
+            project_root,
+        )
+        assert "answer" in output
+        assert "source" in output
+        tool_names = [tc.get("tool") for tc in output["tool_calls"]]
+        # Should use list_files or read_file for wiki questions
+        assert "list_files" in tool_names or "read_file" in tool_names
+        # Source should reference a wiki file
+        assert output["source"].startswith("wiki/") or "wiki/" in output["source"]
+
+    def test_learners_count_query(self, project_root: Path) -> None:
+        """Test that learner count queries use query_api and return a number."""
+        output = run_agent("How many distinct learners have submitted data?", project_root)
+        assert "answer" in output
+        assert "tool_calls" in output
+        # Verify query_api was used
+        tool_names = [tc.get("tool") for tc in output["tool_calls"]]
+        assert "query_api" in tool_names
+        # The answer should contain a number
+        import re
+        numbers = re.findall(r"\d+", output["answer"])
+        assert len(numbers) > 0, "Answer should contain a numeric value for learner count"
