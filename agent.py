@@ -304,6 +304,14 @@ def execute_tool(name: str, args: dict[str, Any], config: dict[str, str]) -> str
         result = query_api(method, path, body, auth, config)
         if result["success"]:
             response = f"Status: {result['status_code']}\nBody: {result['body']}"
+            # For array responses, include the count before truncation
+            try:
+                import json
+                data = json.loads(result['body'])
+                if isinstance(data, list):
+                    response = f"Status: {result['status_code']}\nArray length: {len(data)}\nBody: {result['body']}"
+            except:
+                pass
             if len(response) > 4000:
                 response = response[:4000] + "\n... [truncated]"
             return response
